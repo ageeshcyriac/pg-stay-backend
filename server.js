@@ -1,0 +1,73 @@
+const express = require("express");
+const dotenv = require("dotenv");
+const cors = require("cors");
+const rateLimit = require("express-rate-limit");
+const connectDB = require("./config/db");
+const { checkDuePayments } = require("./utils/paymentReminder");
+const checkExpiredBookings = require("./utils/checkExpiredBookings");
+
+dotenv.config();
+connectDB();
+
+const app = express();
+
+// Middleware
+// CORS configuration - allow configurable origins
+const allowedOrigins = process.env.CORS_ORIGINS
+  ? process.env.CORS_ORIGINS.split(",").map(origin => origin.trim())
+  : ["http://localhost:5173", "http://localhost:5174"];
+
+app.use(cors({
+  origin: allowedOrigins,
+  credentials: true
+}));
+app.use(express.json());
+
+// Rate limiting only on login/register (POST /auth/login, POST /auth/register)
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: { message: "Too many attempts. Please try again after 15 minutes." },
+  keyGenerator: (req) => req.body?.email || req.ip, // Limit per email or IP
+  skip: (req) => {
+    // Only apply rate limit to login and register
+    return !req.path.match(/^\/(login|register)$/);
+  },
+});
+
+// Routes
+app.use("/api/auth", loginLimiter, require("./routes/auth"));
+app.use("/api/pgs", require("./routes/pgs"));
+app.use("/api/rooms", require("./routes/rooms"));
+app.use("/api/applications", require("./routes/applications"));
+app.use("/api/feedback", require("./routes/feedback"));
+app.use("/api/notifications", require("./routes/notifications"));
+app.use("/api/complaints", require("./routes/complaints"));
+app.use("/api/bookings", require("./routes/bookings"));
+app.use("/api/admin", require("./routes/admin"));
+app.use("/api/verify", require("./routes/verify"));  // ← NEW
+
+// Health check
+app.get("/", (req, res) => res.json({ message: "PG Stay API is running" }));
+
+// 404 handler
+app.use((req, res) => {
+  res.status(404).json({ message: "Route not found" });
+});
+
+// Global error handler
+app.use((err, req, res, next) => {
+  console.error(err.stack);
+  res.status(err.status || 500).json({
+    message: err.message || "Internal Server Error",
+  });
+});
+
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+  checkDuePayments();
+  checkExpiredBookings();
+  setInterval(checkDuePayments, 24 * 60 * 60 * 1000);
+  setInterval(checkExpiredBookings, 24 * 60 * 60 * 1000);
+});
